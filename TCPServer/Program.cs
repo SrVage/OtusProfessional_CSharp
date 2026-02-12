@@ -1,6 +1,6 @@
 ﻿using TCPServer;
 
-var server = new TcpServer();
+using var server = new TcpServer();
 
 Console.CancelKeyPress += (sender, eventArgs) =>
 {

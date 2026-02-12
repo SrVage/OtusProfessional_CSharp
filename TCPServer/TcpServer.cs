@@ -14,7 +14,19 @@ public class TcpServer : IDisposable
     private readonly int _port;
     private readonly CancellationTokenSource _cancellationTokenSource;
     private Socket _socket;
-    private bool _isRunning;
+    private readonly Lock _lock = new();
+
+    private bool IsRunning
+    {
+        get
+        {
+            lock (_lock) return field;
+        }
+        set
+        {
+            lock (_lock) field = value;
+        }
+    }
     
     public TcpServer(string ip, int port)
     {
@@ -58,7 +70,7 @@ public class TcpServer : IDisposable
             _socket.Bind(endPoint);
             _socket.Listen(BACKLOG);
 
-            _isRunning = true;
+            IsRunning = true;
 
             Console.WriteLine($"Listening on {_ipAddress}:{_port}");
             
@@ -78,10 +90,10 @@ public class TcpServer : IDisposable
 
     public void Stop()
     {
-        if(!_isRunning)
+        if(!IsRunning)
             return;
         
-        _isRunning = false;
+        IsRunning = false;
         _cancellationTokenSource.Cancel();
         try
         {
@@ -95,7 +107,7 @@ public class TcpServer : IDisposable
 
     private async Task AcceptConnectionsAsync(CancellationToken token)
     {
-        while (!token.IsCancellationRequested && _isRunning)
+        while (!token.IsCancellationRequested && IsRunning)
         {
             try
             {
