@@ -1,6 +1,9 @@
-﻿using TCPServer;
+﻿using OtusProfessional_CSharp;
+using TCPServer;
 
-using var server = new TcpServer();
+var simpleStore = new SimpleStore();
+
+using var server = new TcpServer(simpleStore);
 
 Console.CancelKeyPress += (sender, eventArgs) =>
 {

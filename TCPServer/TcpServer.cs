@@ -15,6 +15,7 @@ public class TcpServer : IDisposable
     private readonly CancellationTokenSource _cancellationTokenSource;
     private Socket _socket;
     private readonly Lock _lock = new();
+    private readonly SimpleStore _simpleStore;
 
     private bool IsRunning
     {
@@ -28,8 +29,9 @@ public class TcpServer : IDisposable
         }
     }
     
-    public TcpServer(string ip, int port)
+    public TcpServer(string ip, int port, SimpleStore simpleStore)
     {
+        _simpleStore = simpleStore;
         if (IPAddress.TryParse(ip, out IPAddress? ipAddress))
         {
             _ipAddress = ipAddress;
@@ -49,8 +51,9 @@ public class TcpServer : IDisposable
         _cancellationTokenSource = new CancellationTokenSource();
     }
 
-    public TcpServer()
+    public TcpServer(SimpleStore simpleStore)
     {
+        _simpleStore = simpleStore;
         if (IPAddress.TryParse("127.0.0.1", out IPAddress? ipAddress))
         {
             _ipAddress = ipAddress;
