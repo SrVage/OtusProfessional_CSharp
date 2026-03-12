@@ -16,6 +16,9 @@ public class TcpServer : IDisposable
     private Socket _socket;
     private readonly Lock _lock = new();
     private readonly SimpleStore _simpleStore;
+    private byte[] _keyNotFoundResponse;
+    private byte[] _okResponse;
+    private byte[] _unknownCommandResponse;
 
     private bool IsRunning
     {
@@ -31,6 +34,7 @@ public class TcpServer : IDisposable
     
     public TcpServer(string ip, int port, SimpleStore simpleStore)
     {
+        InitializeStandardResponses();
         _simpleStore = simpleStore;
         if (IPAddress.TryParse(ip, out IPAddress? ipAddress))
         {
@@ -53,6 +57,7 @@ public class TcpServer : IDisposable
 
     public TcpServer(SimpleStore simpleStore)
     {
+        InitializeStandardResponses();
         _simpleStore = simpleStore;
         if (IPAddress.TryParse("127.0.0.1", out IPAddress? ipAddress))
         {
@@ -60,6 +65,13 @@ public class TcpServer : IDisposable
             _port = 8080;
             _cancellationTokenSource = new CancellationTokenSource();
         }
+    }
+
+    private void InitializeStandardResponses()
+    {
+        _keyNotFoundResponse = Encoding.UTF8.GetBytes("Key not found \r\n");
+        _okResponse = Encoding.UTF8.GetBytes("OK\r\n");
+        _unknownCommandResponse = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
     }
 
     public async Task StartAsync()
@@ -156,6 +168,22 @@ public class TcpServer : IDisposable
                 
                 ReadOnlySpan<char> span = receivedData.AsSpan();
                 var parseResult = CommandParser.Parse(span);
+
+                switch (parseResult.Command)
+                {
+                    case "GET":
+                        ProcessGetCommand(clientSocket, parseResult);
+                        break;
+                    case "SET":
+                        ProcessSetCommand(clientSocket, parseResult);
+                        break;
+                    case "DELETE":
+                        ProcessDeleteCommand(clientSocket, parseResult);
+                        break;
+                    default:
+                        clientSocket.SendAsync(_unknownCommandResponse);
+                        break;
+                }
                 
                 Console.WriteLine("----Parse result----");
                 Console.WriteLine("Command: {0}", parseResult.Command.ToString());
@@ -201,6 +229,31 @@ public class TcpServer : IDisposable
                 Console.WriteLine($"Client disconnected from {clientEndpoint}");
             }
         }
+    }
+
+    private void ProcessDeleteCommand(Socket clientSocket, ParseCommand parseResult)
+    {
+        var key = parseResult.Key.ToString();
+        _simpleStore.Delete(key);
+        clientSocket.SendAsync(_okResponse);
+    }
+
+    private void ProcessSetCommand(Socket clientSocket, ParseCommand parseResult)
+    {
+        var key = parseResult.Key.ToString();
+        var valueBytesCount = Encoding.UTF8.GetByteCount(parseResult.Value);
+        var spanArray = ArrayPool<byte>.Shared.Rent(valueBytesCount);
+        Encoding.UTF8.GetBytes(parseResult.Value, spanArray);
+        _simpleStore.Set(key, spanArray);
+        ArrayPool<byte>.Shared.Return(spanArray);
+        clientSocket.SendAsync(_okResponse);
+    }
+
+    private void ProcessGetCommand(Socket clientSocket, ParseCommand parseResult)
+    {
+        var key = parseResult.Key.ToString();
+        var result = _simpleStore.Get(key);
+        clientSocket.SendAsync(result ?? _keyNotFoundResponse);
     }
 
     public void Dispose()
