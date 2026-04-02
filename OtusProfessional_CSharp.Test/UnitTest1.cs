@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using Common;
 
 namespace OtusProfessional_CSharp.Test;
 
@@ -66,8 +67,11 @@ public class UnitTest1
                 for (int j = 0; j < operationsPerTask; j++)
                 {
                     string key = $"key_{taskId}_{j}";
-                    byte[] value = Encoding.UTF8.GetBytes($"value_{taskId}_{j}");
-                    store.Set(key, value);
+                    var profile = new UserProfile();
+                    profile.CreatedAt = DateTime.UtcNow;
+                    profile.Id = j;
+                    profile.Username = $"user_{taskId}_{j}";
+                    store.Set(key, profile);
                 }
             }));
         }
@@ -106,7 +110,7 @@ public class UnitTest1
                 
                 Assert.NotNull(resultBytes);
                 
-                string actualValueString = Encoding.UTF8.GetString(resultBytes);
+                string actualValueString = resultBytes.Username;
                 Assert.Equal(expectedValueString, actualValueString);
             }
         }

@@ -1,3 +1,4 @@
+using Common;
 using NBomber.CSharp;
 
 var random = new Random();
@@ -25,9 +26,14 @@ var scenario = Scenario.Create("TCP Store Load Test", async context =>
                 try
                 {
                     string randomValue = $"value_{Guid.NewGuid().ToString().Substring(0, 8)}";
-                    byte[] valueBytes = System.Text.Encoding.UTF8.GetBytes(randomValue);
+                    var profile = new UserProfile()
+                    {
+                        Id = random.Next(0, int.MaxValue),
+                        Username = randomValue,
+                        CreatedAt = DateTime.UtcNow
+                    };
 
-                    await client.SetAsync(randomKey, valueBytes);
+                    await client.SetAsync(randomKey, profile);
 
                     return Response.Ok();
                 }

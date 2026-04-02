@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TcpClient", "TcpClient\TcpC
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LoadTests", "LoadTests\LoadTests.csproj", "{101FCD76-2548-4F5D-B2DE-A11DC6A6E79B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Common", "Common\Common.csproj", "{6E95AC2E-ACE0-47FC-9EDB-0489A80078CE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -36,5 +38,9 @@ Global
 		{101FCD76-2548-4F5D-B2DE-A11DC6A6E79B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{101FCD76-2548-4F5D-B2DE-A11DC6A6E79B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{101FCD76-2548-4F5D-B2DE-A11DC6A6E79B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6E95AC2E-ACE0-47FC-9EDB-0489A80078CE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6E95AC2E-ACE0-47FC-9EDB-0489A80078CE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6E95AC2E-ACE0-47FC-9EDB-0489A80078CE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6E95AC2E-ACE0-47FC-9EDB-0489A80078CE}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
