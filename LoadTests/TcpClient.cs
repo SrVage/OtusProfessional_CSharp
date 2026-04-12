@@ -2,6 +2,8 @@ using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Common;
+using System.Text.Json;
 
 namespace LoadTests;
 
@@ -32,13 +34,13 @@ public class TcpClient : IDisposable
         await _clientSocket.ConnectAsync(new IPEndPoint(_serverAddress, _serverPort));
     }
 
-    public async Task SetAsync(string key, byte[] value)
+    public async Task SetAsync(string key, UserProfile profile)
     {
         if (_clientSocket == null || !_clientSocket.Connected)
             throw new InvalidOperationException("Client is not connected");
 
-        string valueStr = Encoding.UTF8.GetString(value);
-        string command = $"SET {key} {valueStr}\r\n";
+        var profileValue = JsonSerializer.Serialize(profile);
+        string command = $"SET {key} {profileValue}\r\n";
         byte[] commandBytes = Encoding.UTF8.GetBytes(command);
         byte[] responseBuffer = ArrayPool<byte>.Shared.Rent(1024);
 
@@ -60,7 +62,7 @@ public class TcpClient : IDisposable
         }
     }
 
-    public async Task<byte[]?> GetAsync(string key)
+    public async Task<UserProfile?> GetAsync(string key)
     {
         if (_clientSocket == null || !_clientSocket.Connected)
             throw new InvalidOperationException("Client is not connected");
@@ -86,7 +88,8 @@ public class TcpClient : IDisposable
 
             byte[] result = new byte[bytesRead];
             Array.Copy(responseBuffer, result, bytesRead);
-            return result;
+            var profile = JsonSerializer.Deserialize<UserProfile>(result);
+            return profile;
         }
         finally
         {

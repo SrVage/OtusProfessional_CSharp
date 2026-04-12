@@ -1,3 +1,6 @@
+using System.Text.Json;
+using Common;
+
 namespace OtusProfessional_CSharp;
 
 public class SimpleStore : IDisposable
@@ -9,15 +12,16 @@ public class SimpleStore : IDisposable
     private long _getCount;
     private long _deleteCount;
 
-    public void Set(string key, byte[] value)
+    public void Set(string key, UserProfile profile)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _lock.EnterWriteLock();
         
         try
         {
-            if (!_store.TryAdd(key, value))
-                _store[key] = value;
+            var profileValue = JsonSerializer.SerializeToUtf8Bytes(profile);
+            if (!_store.TryAdd(key, profileValue))
+                _store[key] = profileValue;
             Interlocked.Increment(ref _setCount);
         }
         finally
@@ -26,7 +30,7 @@ public class SimpleStore : IDisposable
         }
     }
     
-    public byte[]? Get(string key)
+    public UserProfile? Get(string key)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _lock.EnterReadLock();
@@ -35,7 +39,8 @@ public class SimpleStore : IDisposable
         {
             var getValue = _store.GetValueOrDefault(key);
             Interlocked.Increment(ref _getCount);
-            return getValue;
+            var profile = JsonSerializer.Deserialize<UserProfile>(getValue);
+            return profile;
         }
         finally
         {

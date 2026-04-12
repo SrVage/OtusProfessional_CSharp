@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using OtusProfessional_CSharp;
+using System.Text.Json;
+using Common;
 
 namespace TCPServer;
 
@@ -241,11 +243,13 @@ public class TcpServer : IDisposable
     private void ProcessSetCommand(Socket clientSocket, ParseCommand parseResult)
     {
         var key = parseResult.Key.ToString();
-        var valueBytesCount = Encoding.UTF8.GetByteCount(parseResult.Value);
-        var spanArray = ArrayPool<byte>.Shared.Rent(valueBytesCount);
-        Encoding.UTF8.GetBytes(parseResult.Value, spanArray);
-        _simpleStore.Set(key, spanArray);
-        ArrayPool<byte>.Shared.Return(spanArray);
+        var profile = JsonSerializer.Deserialize<UserProfile>(parseResult.Value);
+        if (profile == null)
+        {
+            clientSocket.SendAsync(_unknownCommandResponse);
+            return;
+        }
+        _simpleStore.Set(key, profile);
         clientSocket.SendAsync(_okResponse);
     }
 
@@ -253,7 +257,8 @@ public class TcpServer : IDisposable
     {
         var key = parseResult.Key.ToString();
         var result = _simpleStore.Get(key);
-        clientSocket.SendAsync(result ?? _keyNotFoundResponse);
+        var profileValue = JsonSerializer.SerializeToUtf8Bytes(result);
+        clientSocket.SendAsync(profileValue.Length > 0 ? profileValue : _keyNotFoundResponse);
     }
 
     public void Dispose()
