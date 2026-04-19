@@ -55,29 +55,133 @@ public class BinarySerializeGenerator : ISourceGenerator
         sb.Append($"namespace {nameSpace} {{\n");
         sb.Append($"public partial class {className} {{\n");
         sb.Append("public byte[] SerializeToBinary() {\n");
-        sb.Append("using var stream = new MemoryStream();\n");
-        sb.Append("using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);\n");
+        sb.Append("int totalSize = 0;\n");
+        int totalCountBytes = 0; //Размер всех полей примитивных типов
+
+        foreach (var member in classSymbol.GetMembers().OfType<IPropertySymbol>())
+        {
+            var propertyType = member.Type;
+            var propertyName = member.Name;
+            
+            if (propertyType.SpecialType == SpecialType.System_String)
+            {
+                //Вычисляем размер строки в байтах
+                sb.Append($"int {propertyName}Length = Encoding.UTF8.GetByteCount({propertyName} ?? string.Empty);\n");
+                sb.Append($"totalSize += (4 + {propertyName}Length);\n");
+            }
+            else
+            {
+                totalCountBytes += GetTypeByteCount(propertyType.SpecialType);
+            }
+        }
+        sb.Append($"int totalBytesCount = {totalCountBytes};\n");
+        sb.Append("totalBytesCount += totalSize;\n"); //Суммируем размеры
+        
+        sb.Append($"byte[] array = new byte[totalBytesCount];\n");
+        sb.Append("int offset = 0;\n");
+        sb.Append("Span<byte> span = new Span<byte>(array);\n");
         foreach (var member in classSymbol.GetMembers().OfType<IPropertySymbol>())
         {
             var propertyName = member.Name;
             var propertyType = member.Type;
             
             sb.Append($"//Serialize {propertyName} of type {propertyType}\n");
-            if (propertyType.ToString().Equals("System.DateTime"))
+            if (propertyType.SpecialType == SpecialType.System_String)
             {
-                sb.Append($"writer.Write({propertyName}.ToBinary());\n");
+                sb.Append($"BitConverter.TryWriteBytes(span.Slice(offset, 4), {propertyName}Length);\n"); //Пишем размер строки для десериализации
+                sb.Append("offset += 4;\n");
+                sb.Append($"Encoding.UTF8.GetBytes({propertyName} ?? string.Empty, span.Slice(offset));\n");
+                sb.Append($"offset += {propertyName}Length;\n");
+            }
+            else if (propertyType.SpecialType == SpecialType.System_DateTime)
+            {
+                sb.Append($"BitConverter.TryWriteBytes(span.Slice(offset, 8), {propertyName}.ToBinary());\n");
+                sb.Append($"offset += 8;\n");
             }
             else
             {
-                sb.Append($"writer.Write({propertyName});\n");
+                sb.Append(
+                    $"BitConverter.TryWriteBytes(span.Slice(offset, {GetTypeByteCount(propertyType.SpecialType)}), {propertyName});\n");
+                sb.Append($"offset += {GetTypeByteCount(propertyType.SpecialType)};\n");
             }
         }
-        sb.Append("writer.Flush();\n");
-        sb.Append("return stream.ToArray();\n");
+        sb.Append("return array;\n");
         sb.Append("}\n");
         sb.Append("}\n");
         sb.Append("}");
         return sb.ToString();
+    }
+
+    private static int GetTypeByteCount(SpecialType type)
+    {
+        switch (type)
+        {
+            case SpecialType.System_Boolean:
+            case SpecialType.System_SByte:
+            case SpecialType.System_Byte:
+                return 1;
+        
+            case SpecialType.System_Char:
+            case SpecialType.System_Int16:
+            case SpecialType.System_UInt16:
+                return 2;
+        
+            case SpecialType.System_Int32:
+            case SpecialType.System_UInt32:
+            case SpecialType.System_Single:
+                return 4;
+        
+            case SpecialType.System_Int64:
+            case SpecialType.System_UInt64:
+            case SpecialType.System_Double:
+            case SpecialType.System_DateTime:
+                return 8;
+        
+            case SpecialType.System_Decimal:
+                return 16;
+        
+            case SpecialType.System_String:
+            case SpecialType.System_Array:
+            case SpecialType.System_Object:
+            case SpecialType.System_ValueType:
+            case SpecialType.System_Enum:
+            case SpecialType.System_Nullable_T:
+            case SpecialType.System_Collections_IEnumerable:
+            case SpecialType.System_Collections_Generic_IEnumerable_T:
+            case SpecialType.System_Collections_Generic_IList_T:
+            case SpecialType.System_Collections_Generic_ICollection_T:
+            case SpecialType.System_Collections_Generic_IReadOnlyList_T:
+            case SpecialType.System_Collections_Generic_IReadOnlyCollection_T:
+                return -1;
+        
+            case SpecialType.System_IntPtr:
+            case SpecialType.System_UIntPtr:
+                return -1; 
+        
+            case SpecialType.None:
+            case SpecialType.System_Void:
+            case SpecialType.System_MulticastDelegate:
+            case SpecialType.System_Delegate:
+            case SpecialType.System_Collections_IEnumerator:
+            case SpecialType.System_Collections_Generic_IEnumerator_T:
+            case SpecialType.System_Runtime_CompilerServices_IsVolatile:
+            case SpecialType.System_IDisposable:
+            case SpecialType.System_TypedReference:
+            case SpecialType.System_ArgIterator:
+            case SpecialType.System_RuntimeArgumentHandle:
+            case SpecialType.System_RuntimeFieldHandle:
+            case SpecialType.System_RuntimeMethodHandle:
+            case SpecialType.System_RuntimeTypeHandle:
+            case SpecialType.System_IAsyncResult:
+            case SpecialType.System_AsyncCallback:
+            case SpecialType.System_Runtime_CompilerServices_RuntimeFeature:
+            case SpecialType.System_Runtime_CompilerServices_PreserveBaseOverridesAttribute:
+            case SpecialType.System_Runtime_CompilerServices_InlineArrayAttribute:
+                return 0;
+        
+            default:
+                throw new ArgumentOutOfRangeException(nameof(type), type, null);
+        }
     }
 }
 
