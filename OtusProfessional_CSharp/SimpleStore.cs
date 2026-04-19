@@ -20,6 +20,7 @@ public class SimpleStore : IDisposable
         try
         {
             var profileValue = JsonSerializer.SerializeToUtf8Bytes(profile);
+            //var profileValue = profile.SerializeToBinary();
             if (!_store.TryAdd(key, profileValue))
                 _store[key] = profileValue;
             Interlocked.Increment(ref _setCount);
