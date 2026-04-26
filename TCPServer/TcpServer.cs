@@ -11,7 +11,8 @@ namespace TCPServer;
 public class TcpServer : IDisposable
 {
     private const int BACKLOG = 10;
-    const int BUFFER_SIZE = 1024;
+    private const int BUFFER_SIZE = 1024;
+    private const int MAX_USERS_COUNT = 4;
     private readonly IPAddress _ipAddress;
     private readonly int _port;
     private readonly CancellationTokenSource _cancellationTokenSource;
@@ -21,6 +22,7 @@ public class TcpServer : IDisposable
     private byte[] _keyNotFoundResponse;
     private byte[] _okResponse;
     private byte[] _unknownCommandResponse;
+    private readonly SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(MAX_USERS_COUNT, MAX_USERS_COUNT);
 
     private bool IsRunning
     {
@@ -128,16 +130,19 @@ public class TcpServer : IDisposable
         {
             try
             {
+                await _semaphoreSlim.WaitAsync(token);
                 Socket clientSocket = await _socket.AcceptAsync(token);
                 _ = ProcessClientAsync(clientSocket, token);
             }
             catch (OperationCanceledException)
             {
                 Console.WriteLine("Socket stopped");
+                _semaphoreSlim.Release();
             }
             catch (Exception e)
             {
                 Console.WriteLine("Exception: {0}", e);
+                _semaphoreSlim.Release();
             }
         }
     }
@@ -162,6 +167,13 @@ public class TcpServer : IDisposable
                 if (bytesRead == 0)
                 {
                     Console.WriteLine($"Client disconnected from {clientEndpoint}");
+                    break;
+                }
+
+                if (bytesRead > BUFFER_SIZE)
+                {
+                    Console.WriteLine($"Received data exceeds buffer size from {clientEndpoint}");
+                    clientSocket.Close();
                     break;
                 }
                 
@@ -228,6 +240,7 @@ public class TcpServer : IDisposable
             {
                 clientSocket.Close();
                 clientSocket.Dispose();
+                _semaphoreSlim.Release();
                 Console.WriteLine($"Client disconnected from {clientEndpoint}");
             }
         }
