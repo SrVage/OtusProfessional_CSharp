@@ -17,7 +17,12 @@ public class SerializationBenchmark
         {
             Id = 12345,
             Username = "test_user_benchmark",
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            Weapon = new Weapon()
+            {
+                Damage = 100,
+                Name = "Excalibur"
+            }
         };
 
         var jsonSize = JsonSerializer.SerializeToUtf8Bytes(_testData).Length;

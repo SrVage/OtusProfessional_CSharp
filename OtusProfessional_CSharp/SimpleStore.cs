@@ -40,7 +40,7 @@ public class SimpleStore : IDisposable
         {
             var getValue = _store.GetValueOrDefault(key);
             Interlocked.Increment(ref _getCount);
-            var profile = JsonSerializer.Deserialize<UserProfile>(getValue);
+            var profile = UserProfile.DeserializeFromBinary(getValue);
             return profile;
         }
         finally

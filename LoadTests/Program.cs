@@ -48,7 +48,12 @@ else
                         {
                             Id = random.Next(0, int.MaxValue),
                             Username = randomValue,
-                            CreatedAt = DateTime.UtcNow
+                            CreatedAt = DateTime.UtcNow,
+                            Weapon = new Weapon()
+                            {
+                                Name = $"weapon_{Guid.NewGuid().ToString().Substring(0, 8)}",
+                                Damage = random.Next(1, 100)
+                            }
                         };
 
                         await client.SetAsync(randomKey, profile);
