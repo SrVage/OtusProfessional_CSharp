@@ -1,5 +1,25 @@
-﻿using OtusProfessional_CSharp;
+using OpenTelemetry;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using OtusProfessional_CSharp;
 using TCPServer;
+
+var resourceBuilder = ResourceBuilder
+    .CreateDefault()
+    .AddService(serviceName: Telemetry.ServiceName, serviceVersion: Telemetry.ServiceVersion);
+
+using var tracerProvider = Sdk.CreateTracerProviderBuilder()
+    .SetResourceBuilder(resourceBuilder)
+    .AddSource(Telemetry.ActivitySource.Name)
+    .AddConsoleExporter()
+    .Build();
+
+using var meterProvider = Sdk.CreateMeterProviderBuilder()
+    .SetResourceBuilder(resourceBuilder)
+    .AddMeter(Telemetry.Meter.Name)
+    .AddConsoleExporter()
+    .Build();
 
 var simpleStore = new SimpleStore();
 

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -11,7 +12,8 @@ namespace TCPServer;
 public class TcpServer : IDisposable
 {
     private const int BACKLOG = 10;
-    const int BUFFER_SIZE = 1024;
+    private const int BUFFER_SIZE = 1024;
+    private const int MAX_USERS_COUNT = 4;
     private readonly IPAddress _ipAddress;
     private readonly int _port;
     private readonly CancellationTokenSource _cancellationTokenSource;
@@ -21,6 +23,7 @@ public class TcpServer : IDisposable
     private byte[] _keyNotFoundResponse;
     private byte[] _okResponse;
     private byte[] _unknownCommandResponse;
+    private readonly SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(MAX_USERS_COUNT, MAX_USERS_COUNT);
 
     private bool IsRunning
     {
@@ -128,16 +131,19 @@ public class TcpServer : IDisposable
         {
             try
             {
+                await _semaphoreSlim.WaitAsync(token);
                 Socket clientSocket = await _socket.AcceptAsync(token);
                 _ = ProcessClientAsync(clientSocket, token);
             }
             catch (OperationCanceledException)
             {
                 Console.WriteLine("Socket stopped");
+                _semaphoreSlim.Release();
             }
             catch (Exception e)
             {
                 Console.WriteLine("Exception: {0}", e);
+                _semaphoreSlim.Release();
             }
         }
     }
@@ -164,32 +170,83 @@ public class TcpServer : IDisposable
                     Console.WriteLine($"Client disconnected from {clientEndpoint}");
                     break;
                 }
+
+                if (bytesRead > BUFFER_SIZE)
+                {
+                    Console.WriteLine($"Received data exceeds buffer size from {clientEndpoint}");
+                    clientSocket.Close();
+                    break;
+                }
                 
                 string receivedData = Encoding.UTF8.GetString(rentedBuffer, 0, bytesRead);
                 Console.WriteLine("Received {0} bytes: {1}", bytesRead, receivedData.Trim());
-                
+
                 ReadOnlySpan<char> span = receivedData.AsSpan();
                 var parseResult = CommandParser.Parse(span);
 
-                switch (parseResult.Command)
+                var commandName = parseResult.Command.ToString();
+                var key = parseResult.Key.ToString();
+
+                using (var activity = Telemetry.ActivitySource.StartActivity(
+                    $"tcp.command {commandName}",
+                    ActivityKind.Server))
                 {
-                    case "GET":
-                        ProcessGetCommand(clientSocket, parseResult);
-                        break;
-                    case "SET":
-                        ProcessSetCommand(clientSocket, parseResult);
-                        break;
-                    case "DELETE":
-                        ProcessDeleteCommand(clientSocket, parseResult);
-                        break;
-                    default:
-                        clientSocket.SendAsync(_unknownCommandResponse);
-                        break;
+                    activity?.SetTag("command.name", commandName);
+                    activity?.SetTag("command.key", key);
+                    activity?.SetTag("command.payload_bytes", bytesRead);
+                    activity?.SetTag("net.peer.address", clientEndpoint?.ToString());
+
+                    var stopwatch = Stopwatch.StartNew();
+                    var status = "ok";
+
+                    try
+                    {
+                        switch (parseResult.Command)
+                        {
+                            case "GET":
+                                ProcessGetCommand(clientSocket, parseResult);
+                                break;
+                            case "SET":
+                                ProcessSetCommand(clientSocket, parseResult);
+                                break;
+                            case "DELETE":
+                                ProcessDeleteCommand(clientSocket, parseResult);
+                                break;
+                            default:
+                                clientSocket.SendAsync(_unknownCommandResponse);
+                                status = "unknown";
+                                activity?.SetStatus(ActivityStatusCode.Error, "Unknown command");
+                                break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        status = "error";
+                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                        throw;
+                    }
+                    finally
+                    {
+                        stopwatch.Stop();
+                        var elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
+
+                        activity?.SetTag("command.status", status);
+                        activity?.SetTag("command.duration_ms", elapsedMs);
+
+                        var tags = new TagList
+                        {
+                            { "command.name", commandName },
+                            { "command.status", status }
+                        };
+
+                        Telemetry.CommandsProcessed.Add(1, tags);
+                        Telemetry.CommandDuration.Record(elapsedMs, tags);
+                    }
                 }
-                
+
                 Console.WriteLine("----Parse result----");
-                Console.WriteLine("Command: {0}", parseResult.Command.ToString());
-                Console.WriteLine("Key: {0}", parseResult.Key.ToString());
+                Console.WriteLine("Command: {0}", commandName);
+                Console.WriteLine("Key: {0}", key);
                 Console.WriteLine("Value: {0}", parseResult.Value.ToString());
                 Console.WriteLine("----End----");
             }
@@ -228,6 +285,7 @@ public class TcpServer : IDisposable
             {
                 clientSocket.Close();
                 clientSocket.Dispose();
+                _semaphoreSlim.Release();
                 Console.WriteLine($"Client disconnected from {clientEndpoint}");
             }
         }
