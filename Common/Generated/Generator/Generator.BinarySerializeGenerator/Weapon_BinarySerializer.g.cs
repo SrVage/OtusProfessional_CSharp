@@ -21,8 +21,10 @@ offset += 4;
 return array;
 }
 public static Weapon DeserializeFromBinary(byte[] array) {
+if (array is null) throw new ArgumentNullException(nameof(array));
 var result = new Weapon();
 int offset = 0;
+try {
 ReadOnlySpan<byte> span = new ReadOnlySpan<byte>(array);
 //Deserialize Name of type string
 int NameLength = BitConverter.ToInt32(span.Slice(offset, 4));
@@ -33,6 +35,10 @@ offset += NameLength;
 result.Damage = BitConverter.ToInt32(span.Slice(offset, 4));
 offset += 4;
 return result;
+}
+catch (Exception ex) when (ex is not System.IO.InvalidDataException) {
+throw new System.IO.InvalidDataException("Failed to deserialize Weapon at offset " + offset, ex);
+}
 }
 }
 }

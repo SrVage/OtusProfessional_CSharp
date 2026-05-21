@@ -23,6 +23,8 @@ public class TcpServer : IDisposable
     private byte[] _keyNotFoundResponse;
     private byte[] _okResponse;
     private byte[] _unknownCommandResponse;
+    private byte[] _invalidJsonResponse;
+    private byte[] _corruptedDataResponse;
     private readonly SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(MAX_USERS_COUNT, MAX_USERS_COUNT);
 
     private bool IsRunning
@@ -77,6 +79,8 @@ public class TcpServer : IDisposable
         _keyNotFoundResponse = Encoding.UTF8.GetBytes("Key not found \r\n");
         _okResponse = Encoding.UTF8.GetBytes("OK\r\n");
         _unknownCommandResponse = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
+        _invalidJsonResponse = Encoding.UTF8.GetBytes("-ERR Invalid JSON\r\n");
+        _corruptedDataResponse = Encoding.UTF8.GetBytes("-ERR Corrupted data\r\n");
     }
 
     public async Task StartAsync()
@@ -204,10 +208,10 @@ public class TcpServer : IDisposable
                         switch (parseResult.Command)
                         {
                             case "GET":
-                                ProcessGetCommand(clientSocket, parseResult);
+                                ProcessGetCommand(clientSocket, parseResult, activity);
                                 break;
                             case "SET":
-                                ProcessSetCommand(clientSocket, parseResult);
+                                ProcessSetCommand(clientSocket, parseResult, activity);
                                 break;
                             case "DELETE":
                                 ProcessDeleteCommand(clientSocket, parseResult);
@@ -229,6 +233,10 @@ public class TcpServer : IDisposable
                     {
                         stopwatch.Stop();
                         var elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
+
+                        //Если кто-то из Process* отметил активность как Error, отразим это и в метрике
+                        if (status == "ok" && activity?.Status == ActivityStatusCode.Error)
+                            status = "error";
 
                         activity?.SetTag("command.status", status);
                         activity?.SetTag("command.duration_ms", elapsedMs);
@@ -298,25 +306,53 @@ public class TcpServer : IDisposable
         clientSocket.SendAsync(_okResponse);
     }
 
-    private void ProcessSetCommand(Socket clientSocket, ParseCommand parseResult)
+    private void ProcessSetCommand(Socket clientSocket, ParseCommand parseResult, Activity? activity)
     {
         var key = parseResult.Key.ToString();
-        var profile = JsonSerializer.Deserialize<UserProfile>(parseResult.Value);
+        UserProfile? profile;
+        try
+        {
+            profile = JsonSerializer.Deserialize<UserProfile>(parseResult.Value);
+        }
+        catch (JsonException ex)
+        {
+            Console.WriteLine($"Invalid JSON for key '{key}': {ex.Message}");
+            clientSocket.SendAsync(_invalidJsonResponse);
+            activity?.SetStatus(ActivityStatusCode.Error, "Invalid JSON");
+            return;
+        }
         if (profile == null)
         {
             clientSocket.SendAsync(_unknownCommandResponse);
+            activity?.SetStatus(ActivityStatusCode.Error, "Empty profile");
             return;
         }
         _simpleStore.Set(key, profile);
         clientSocket.SendAsync(_okResponse);
     }
 
-    private void ProcessGetCommand(Socket clientSocket, ParseCommand parseResult)
+    private void ProcessGetCommand(Socket clientSocket, ParseCommand parseResult, Activity? activity)
     {
         var key = parseResult.Key.ToString();
-        var result = _simpleStore.Get(key);
+        UserProfile? result;
+        try
+        {
+            result = _simpleStore.Get(key);
+        }
+        catch (System.IO.InvalidDataException ex)
+        {
+            Console.WriteLine($"Corrupted data for key '{key}': {ex.Message}");
+            clientSocket.SendAsync(_corruptedDataResponse);
+            activity?.SetStatus(ActivityStatusCode.Error, "Corrupted data");
+            return;
+        }
+        if (result is null)
+        {
+            clientSocket.SendAsync(_keyNotFoundResponse);
+            return;
+        }
         var profileValue = JsonSerializer.SerializeToUtf8Bytes(result);
-        clientSocket.SendAsync(profileValue.Length > 0 ? profileValue : _keyNotFoundResponse);
+        clientSocket.SendAsync(profileValue);
     }
 
     public void Dispose()

@@ -34,8 +34,10 @@ offset += WeaponLength;
 return array;
 }
 public static UserProfile DeserializeFromBinary(byte[] array) {
+if (array is null) throw new ArgumentNullException(nameof(array));
 var result = new UserProfile();
 int offset = 0;
+try {
 ReadOnlySpan<byte> span = new ReadOnlySpan<byte>(array);
 //Deserialize Id of type int
 result.Id = BitConverter.ToInt32(span.Slice(offset, 4));
@@ -59,6 +61,10 @@ result.Weapon = Common.Weapon.DeserializeFromBinary(span.Slice(offset, WeaponLen
 offset += WeaponLength;
 }
 return result;
+}
+catch (Exception ex) when (ex is not System.IO.InvalidDataException) {
+throw new System.IO.InvalidDataException("Failed to deserialize UserProfile at offset " + offset, ex);
+}
 }
 }
 }

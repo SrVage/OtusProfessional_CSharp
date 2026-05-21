@@ -162,8 +162,10 @@ public class BinarySerializeGenerator : ISourceGenerator
     {
         var className = classSymbol.Name;
         sb.Append($"public static {className} DeserializeFromBinary(byte[] array) {{\n");
+        sb.Append("if (array is null) throw new ArgumentNullException(nameof(array));\n");
         sb.Append($"var result = new {className}();\n");
         sb.Append("int offset = 0;\n");
+        sb.Append("try {\n");
         sb.Append("ReadOnlySpan<byte> span = new ReadOnlySpan<byte>(array);\n");
         foreach (var member in GetSerializableProperties(classSymbol))
         {
@@ -227,6 +229,11 @@ public class BinarySerializeGenerator : ISourceGenerator
             }
         }
         sb.Append("return result;\n");
+        sb.Append("}\n");
+        //Любое падение чтения сворачиваем в InvalidDataException с контекстом — кроме уже-обёрнутого (из вложенных)
+        sb.Append("catch (Exception ex) when (ex is not System.IO.InvalidDataException) {\n");
+        sb.Append($"throw new System.IO.InvalidDataException(\"Failed to deserialize {className} at offset \" + offset, ex);\n");
+        sb.Append("}\n");
         sb.Append("}\n");
     }
 

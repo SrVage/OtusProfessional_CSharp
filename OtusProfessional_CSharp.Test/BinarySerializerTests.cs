@@ -39,6 +39,41 @@ public class BinarySerializerTests
     }
 
     [Fact]
+    public void Deserialize_NullArray_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => UserProfile.DeserializeFromBinary(null!));
+    }
+
+    [Fact]
+    public void Deserialize_TooShortArray_ThrowsInvalidData()
+    {
+        //3 байта — даже Id (int32) не вычитать
+        Assert.Throws<System.IO.InvalidDataException>(() => UserProfile.DeserializeFromBinary(new byte[3]));
+    }
+
+    [Fact]
+    public void Deserialize_GarbageBytes_ThrowsInvalidData()
+    {
+        //Случайные байты: длина строки прочитается как огромная и упадёт на Slice
+        var garbage = Enumerable.Range(0, 64).Select(i => (byte)(i * 31)).ToArray();
+        Assert.Throws<System.IO.InvalidDataException>(() => UserProfile.DeserializeFromBinary(garbage));
+    }
+
+    [Fact]
+    public void Deserialize_TruncatedAfterValidPrefix_ThrowsInvalidData()
+    {
+        var original = new UserProfile
+        {
+            Id = 1, Username = "kramp", CreatedAt = DateTime.UnixEpoch,
+            Weapon = new Weapon { Name = "Sword", Damage = 10 }
+        };
+        var bytes = original.SerializeToBinary();
+        //Обрезаем середину — Username вычитается, на CreatedAt не хватит
+        var truncated = bytes.AsSpan(0, 10).ToArray();
+        Assert.Throws<System.IO.InvalidDataException>(() => UserProfile.DeserializeFromBinary(truncated));
+    }
+
+    [Fact]
     public void UserProfile_WithNullWeapon_Roundtrip_KeepsWeaponNull()
     {
         var original = new UserProfile
