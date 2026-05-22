@@ -190,6 +190,7 @@ public class TcpServer : IDisposable
 
                 var commandName = parseResult.Command.ToString();
                 var key = parseResult.Key.ToString();
+                var rawValue = parseResult.Value.ToString();
 
                 using (var activity = Telemetry.ActivitySource.StartActivity(
                     $"tcp.command {commandName}",
@@ -208,16 +209,16 @@ public class TcpServer : IDisposable
                         switch (parseResult.Command)
                         {
                             case "GET":
-                                ProcessGetCommand(clientSocket, parseResult, activity);
+                                await ProcessGetCommandAsync(clientSocket, key, activity, token);
                                 break;
                             case "SET":
-                                ProcessSetCommand(clientSocket, parseResult, activity);
+                                await ProcessSetCommandAsync(clientSocket, key, rawValue, activity, token);
                                 break;
                             case "DELETE":
-                                ProcessDeleteCommand(clientSocket, parseResult);
+                                await ProcessDeleteCommandAsync(clientSocket, key, token);
                                 break;
                             default:
-                                clientSocket.SendAsync(_unknownCommandResponse);
+                                await clientSocket.SendAsync(_unknownCommandResponse, SocketFlags.None, token);
                                 status = "unknown";
                                 activity?.SetStatus(ActivityStatusCode.Error, "Unknown command");
                                 break;
@@ -255,7 +256,7 @@ public class TcpServer : IDisposable
                 Console.WriteLine("----Parse result----");
                 Console.WriteLine("Command: {0}", commandName);
                 Console.WriteLine("Key: {0}", key);
-                Console.WriteLine("Value: {0}", parseResult.Value.ToString());
+                Console.WriteLine("Value: {0}", rawValue);
                 Console.WriteLine("----End----");
             }
         }
@@ -299,41 +300,38 @@ public class TcpServer : IDisposable
         }
     }
 
-    private void ProcessDeleteCommand(Socket clientSocket, ParseCommand parseResult)
+    private async Task ProcessDeleteCommandAsync(Socket clientSocket, string key, CancellationToken token)
     {
-        var key = parseResult.Key.ToString();
         _simpleStore.Delete(key);
-        clientSocket.SendAsync(_okResponse);
+        await clientSocket.SendAsync(_okResponse, SocketFlags.None, token);
     }
 
-    private void ProcessSetCommand(Socket clientSocket, ParseCommand parseResult, Activity? activity)
+    private async Task ProcessSetCommandAsync(Socket clientSocket, string key, string value, Activity? activity, CancellationToken token)
     {
-        var key = parseResult.Key.ToString();
         UserProfile? profile;
         try
         {
-            profile = JsonSerializer.Deserialize<UserProfile>(parseResult.Value);
+            profile = JsonSerializer.Deserialize<UserProfile>(value);
         }
         catch (JsonException ex)
         {
             Console.WriteLine($"Invalid JSON for key '{key}': {ex.Message}");
-            clientSocket.SendAsync(_invalidJsonResponse);
+            await clientSocket.SendAsync(_invalidJsonResponse, SocketFlags.None, token);
             activity?.SetStatus(ActivityStatusCode.Error, "Invalid JSON");
             return;
         }
         if (profile == null)
         {
-            clientSocket.SendAsync(_unknownCommandResponse);
+            await clientSocket.SendAsync(_unknownCommandResponse, SocketFlags.None, token);
             activity?.SetStatus(ActivityStatusCode.Error, "Empty profile");
             return;
         }
         _simpleStore.Set(key, profile);
-        clientSocket.SendAsync(_okResponse);
+        await clientSocket.SendAsync(_okResponse, SocketFlags.None, token);
     }
 
-    private void ProcessGetCommand(Socket clientSocket, ParseCommand parseResult, Activity? activity)
+    private async Task ProcessGetCommandAsync(Socket clientSocket, string key, Activity? activity, CancellationToken token)
     {
-        var key = parseResult.Key.ToString();
         UserProfile? result;
         try
         {
@@ -342,17 +340,17 @@ public class TcpServer : IDisposable
         catch (System.IO.InvalidDataException ex)
         {
             Console.WriteLine($"Corrupted data for key '{key}': {ex.Message}");
-            clientSocket.SendAsync(_corruptedDataResponse);
+            await clientSocket.SendAsync(_corruptedDataResponse, SocketFlags.None, token);
             activity?.SetStatus(ActivityStatusCode.Error, "Corrupted data");
             return;
         }
         if (result is null)
         {
-            clientSocket.SendAsync(_keyNotFoundResponse);
+            await clientSocket.SendAsync(_keyNotFoundResponse, SocketFlags.None, token);
             return;
         }
         var profileValue = JsonSerializer.SerializeToUtf8Bytes(result);
-        clientSocket.SendAsync(profileValue);
+        await clientSocket.SendAsync(profileValue, SocketFlags.None, token);
     }
 
     public void Dispose()
