@@ -158,6 +158,7 @@ public class TcpServer : IDisposable
         Console.WriteLine($"Client connected from {clientEndpoint}");
         
         byte[]? rentedBuffer = null;
+        int bufferedBytes = 0;
 
         try
         {
@@ -165,7 +166,7 @@ public class TcpServer : IDisposable
             while (!token.IsCancellationRequested)
             {
                 int bytesRead = await clientSocket.ReceiveAsync(
-                    new Memory<byte>(rentedBuffer, 0, BUFFER_SIZE),
+                    rentedBuffer.AsMemory(bufferedBytes, rentedBuffer.Length - bufferedBytes),
                     SocketFlags.None,
                     token);
 
@@ -175,89 +176,31 @@ public class TcpServer : IDisposable
                     break;
                 }
 
-                if (bytesRead > BUFFER_SIZE)
+                bufferedBytes += bytesRead;
+
+                int processedFrom = 0;
+                while (true)
                 {
-                    Console.WriteLine($"Received data exceeds buffer size from {clientEndpoint}");
-                    clientSocket.Close();
+                    var unparsed = new ReadOnlySpan<byte>(rentedBuffer, processedFrom, bufferedBytes - processedFrom);
+                    int crlfIdx = unparsed.IndexOf("\r\n"u8);
+                    if (crlfIdx < 0) break;
+
+                    await HandleCommandAsync(clientSocket, rentedBuffer, processedFrom, crlfIdx, clientEndpoint, token);
+                    processedFrom += crlfIdx + 2;
+                }
+
+                int leftover = bufferedBytes - processedFrom;
+                if (processedFrom > 0 && leftover > 0)
+                {
+                    Buffer.BlockCopy(rentedBuffer, processedFrom, rentedBuffer, 0, leftover);
+                }
+                bufferedBytes = leftover;
+
+                if (bufferedBytes == rentedBuffer.Length)
+                {
+                    Console.WriteLine($"Command exceeds buffer size from {clientEndpoint}");
                     break;
                 }
-                
-                string receivedData = Encoding.UTF8.GetString(rentedBuffer, 0, bytesRead);
-                Console.WriteLine("Received {0} bytes: {1}", bytesRead, receivedData.Trim());
-
-                ReadOnlySpan<char> span = receivedData.AsSpan();
-                var parseResult = CommandParser.Parse(span);
-
-                var commandName = parseResult.Command.ToString();
-                var key = parseResult.Key.ToString();
-                var rawValue = parseResult.Value.ToString();
-
-                using (var activity = Telemetry.ActivitySource.StartActivity(
-                    $"tcp.command {commandName}",
-                    ActivityKind.Server))
-                {
-                    activity?.SetTag("command.name", commandName);
-                    activity?.SetTag("command.key", key);
-                    activity?.SetTag("command.payload_bytes", bytesRead);
-                    activity?.SetTag("net.peer.address", clientEndpoint?.ToString());
-
-                    var stopwatch = Stopwatch.StartNew();
-                    var status = "ok";
-
-                    try
-                    {
-                        switch (parseResult.Command)
-                        {
-                            case "GET":
-                                await ProcessGetCommandAsync(clientSocket, key, activity, token);
-                                break;
-                            case "SET":
-                                await ProcessSetCommandAsync(clientSocket, key, rawValue, activity, token);
-                                break;
-                            case "DELETE":
-                                await ProcessDeleteCommandAsync(clientSocket, key, token);
-                                break;
-                            default:
-                                await clientSocket.SendAsync(_unknownCommandResponse, SocketFlags.None, token);
-                                status = "unknown";
-                                activity?.SetStatus(ActivityStatusCode.Error, "Unknown command");
-                                break;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        status = "error";
-                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                        throw;
-                    }
-                    finally
-                    {
-                        stopwatch.Stop();
-                        var elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
-
-                        //Если кто-то из Process* отметил активность как Error, отразим это и в метрике
-                        if (status == "ok" && activity?.Status == ActivityStatusCode.Error)
-                            status = "error";
-
-                        activity?.SetTag("command.status", status);
-                        activity?.SetTag("command.duration_ms", elapsedMs);
-
-                        var tags = new TagList
-                        {
-                            { "command.name", commandName },
-                            { "command.status", status }
-                        };
-
-                        Telemetry.CommandsProcessed.Add(1, tags);
-                        Telemetry.CommandDuration.Record(elapsedMs, tags);
-                    }
-                }
-
-                Console.WriteLine("----Parse result----");
-                Console.WriteLine("Command: {0}", commandName);
-                Console.WriteLine("Key: {0}", key);
-                Console.WriteLine("Value: {0}", rawValue);
-                Console.WriteLine("----End----");
             }
         }
         catch (SocketException e)
@@ -298,6 +241,85 @@ public class TcpServer : IDisposable
                 Console.WriteLine($"Client disconnected from {clientEndpoint}");
             }
         }
+    }
+
+    private async Task HandleCommandAsync(Socket clientSocket, byte[] buffer, int offset, int length, EndPoint? clientEndpoint, CancellationToken token)
+    {
+        string receivedData = Encoding.UTF8.GetString(buffer, offset, length);
+        Console.WriteLine("Received {0} bytes: {1}", length, receivedData);
+
+        ReadOnlySpan<char> span = receivedData.AsSpan();
+        var parseResult = CommandParser.Parse(span);
+
+        var commandName = parseResult.Command.ToString();
+        var key = parseResult.Key.ToString();
+        var rawValue = parseResult.Value.ToString();
+
+        using (var activity = Telemetry.ActivitySource.StartActivity(
+                   $"tcp.command {commandName}",
+                   ActivityKind.Server))
+        {
+            activity?.SetTag("command.name", commandName);
+            activity?.SetTag("command.key", key);
+            activity?.SetTag("command.payload_bytes", length);
+            activity?.SetTag("net.peer.address", clientEndpoint?.ToString());
+
+            var stopwatch = Stopwatch.StartNew();
+            var status = "ok";
+
+            try
+            {
+                switch (parseResult.Command)
+                {
+                    case "GET":
+                        await ProcessGetCommandAsync(clientSocket, key, activity, token);
+                        break;
+                    case "SET":
+                        await ProcessSetCommandAsync(clientSocket, key, rawValue, activity, token);
+                        break;
+                    case "DELETE":
+                        await ProcessDeleteCommandAsync(clientSocket, key, token);
+                        break;
+                    default:
+                        await clientSocket.SendAsync(_unknownCommandResponse, SocketFlags.None, token);
+                        status = "unknown";
+                        activity?.SetStatus(ActivityStatusCode.Error, "Unknown command");
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                status = "error";
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                throw;
+            }
+            finally
+            {
+                stopwatch.Stop();
+                var elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
+
+                if (status == "ok" && activity?.Status == ActivityStatusCode.Error)
+                    status = "error";
+
+                activity?.SetTag("command.status", status);
+                activity?.SetTag("command.duration_ms", elapsedMs);
+
+                var tags = new TagList
+                {
+                    { "command.name", commandName },
+                    { "command.status", status }
+                };
+
+                Telemetry.CommandsProcessed.Add(1, tags);
+                Telemetry.CommandDuration.Record(elapsedMs, tags);
+            }
+        }
+
+        Console.WriteLine("----Parse result----");
+        Console.WriteLine("Command: {0}", commandName);
+        Console.WriteLine("Key: {0}", key);
+        Console.WriteLine("Value: {0}", rawValue);
+        Console.WriteLine("----End----");
     }
 
     private async Task ProcessDeleteCommandAsync(Socket clientSocket, string key, CancellationToken token)
