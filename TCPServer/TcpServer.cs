@@ -172,7 +172,7 @@ public class TcpServer : IDisposable
 
                 if (bytesRead == 0)
                 {
-                    Console.WriteLine($"Client disconnected from {clientEndpoint}");
+                    //Дисконнект логируется один раз в finally — здесь только выходим из цикла
                     break;
                 }
 
@@ -246,14 +246,11 @@ public class TcpServer : IDisposable
     private async Task HandleCommandAsync(Socket clientSocket, byte[] buffer, int offset, int length, EndPoint? clientEndpoint, CancellationToken token)
     {
         string receivedData = Encoding.UTF8.GetString(buffer, offset, length);
-        Console.WriteLine("Received {0} bytes: {1}", length, receivedData);
-
         ReadOnlySpan<char> span = receivedData.AsSpan();
         var parseResult = CommandParser.Parse(span);
 
         var commandName = parseResult.Command.ToString();
         var key = parseResult.Key.ToString();
-        var rawValue = parseResult.Value.ToString();
 
         using (var activity = Telemetry.ActivitySource.StartActivity(
                    $"tcp.command {commandName}",
@@ -275,7 +272,7 @@ public class TcpServer : IDisposable
                         await ProcessGetCommandAsync(clientSocket, key, activity, token);
                         break;
                     case "SET":
-                        await ProcessSetCommandAsync(clientSocket, key, rawValue, activity, token);
+                        await ProcessSetCommandAsync(clientSocket, key, parseResult.Value.ToString(), activity, token);
                         break;
                     case "DELETE":
                         await ProcessDeleteCommandAsync(clientSocket, key, token);
@@ -314,12 +311,6 @@ public class TcpServer : IDisposable
                 Telemetry.CommandDuration.Record(elapsedMs, tags);
             }
         }
-
-        Console.WriteLine("----Parse result----");
-        Console.WriteLine("Command: {0}", commandName);
-        Console.WriteLine("Key: {0}", key);
-        Console.WriteLine("Value: {0}", rawValue);
-        Console.WriteLine("----End----");
     }
 
     private async Task ProcessDeleteCommandAsync(Socket clientSocket, string key, CancellationToken token)
