@@ -23,6 +23,8 @@ public class TcpServer : IDisposable
     private byte[] _keyNotFoundResponse;
     private byte[] _okResponse;
     private byte[] _unknownCommandResponse;
+    private byte[] _invalidJsonResponse;
+    private byte[] _corruptedDataResponse;
     private readonly SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(MAX_USERS_COUNT, MAX_USERS_COUNT);
 
     private bool IsRunning
@@ -77,6 +79,8 @@ public class TcpServer : IDisposable
         _keyNotFoundResponse = Encoding.UTF8.GetBytes("Key not found \r\n");
         _okResponse = Encoding.UTF8.GetBytes("OK\r\n");
         _unknownCommandResponse = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
+        _invalidJsonResponse = Encoding.UTF8.GetBytes("-ERR Invalid JSON\r\n");
+        _corruptedDataResponse = Encoding.UTF8.GetBytes("-ERR Corrupted data\r\n");
     }
 
     public async Task StartAsync()
@@ -154,6 +158,7 @@ public class TcpServer : IDisposable
         Console.WriteLine($"Client connected from {clientEndpoint}");
         
         byte[]? rentedBuffer = null;
+        int bufferedBytes = 0;
 
         try
         {
@@ -161,94 +166,41 @@ public class TcpServer : IDisposable
             while (!token.IsCancellationRequested)
             {
                 int bytesRead = await clientSocket.ReceiveAsync(
-                    new Memory<byte>(rentedBuffer, 0, BUFFER_SIZE),
+                    rentedBuffer.AsMemory(bufferedBytes, rentedBuffer.Length - bufferedBytes),
                     SocketFlags.None,
                     token);
 
                 if (bytesRead == 0)
                 {
-                    Console.WriteLine($"Client disconnected from {clientEndpoint}");
+                    //Дисконнект логируется один раз в finally — здесь только выходим из цикла
                     break;
                 }
 
-                if (bytesRead > BUFFER_SIZE)
+                bufferedBytes += bytesRead;
+
+                int processedFrom = 0;
+                while (true)
                 {
-                    Console.WriteLine($"Received data exceeds buffer size from {clientEndpoint}");
-                    clientSocket.Close();
+                    var unparsed = new ReadOnlySpan<byte>(rentedBuffer, processedFrom, bufferedBytes - processedFrom);
+                    int crlfIdx = unparsed.IndexOf("\r\n"u8);
+                    if (crlfIdx < 0) break;
+
+                    await HandleCommandAsync(clientSocket, rentedBuffer, processedFrom, crlfIdx, clientEndpoint, token);
+                    processedFrom += crlfIdx + 2;
+                }
+
+                int leftover = bufferedBytes - processedFrom;
+                if (processedFrom > 0 && leftover > 0)
+                {
+                    Buffer.BlockCopy(rentedBuffer, processedFrom, rentedBuffer, 0, leftover);
+                }
+                bufferedBytes = leftover;
+
+                if (bufferedBytes == rentedBuffer.Length)
+                {
+                    Console.WriteLine($"Command exceeds buffer size from {clientEndpoint}");
                     break;
                 }
-                
-                string receivedData = Encoding.UTF8.GetString(rentedBuffer, 0, bytesRead);
-                Console.WriteLine("Received {0} bytes: {1}", bytesRead, receivedData.Trim());
-
-                ReadOnlySpan<char> span = receivedData.AsSpan();
-                var parseResult = CommandParser.Parse(span);
-
-                var commandName = parseResult.Command.ToString();
-                var key = parseResult.Key.ToString();
-
-                using (var activity = Telemetry.ActivitySource.StartActivity(
-                    $"tcp.command {commandName}",
-                    ActivityKind.Server))
-                {
-                    activity?.SetTag("command.name", commandName);
-                    activity?.SetTag("command.key", key);
-                    activity?.SetTag("command.payload_bytes", bytesRead);
-                    activity?.SetTag("net.peer.address", clientEndpoint?.ToString());
-
-                    var stopwatch = Stopwatch.StartNew();
-                    var status = "ok";
-
-                    try
-                    {
-                        switch (parseResult.Command)
-                        {
-                            case "GET":
-                                ProcessGetCommand(clientSocket, parseResult);
-                                break;
-                            case "SET":
-                                ProcessSetCommand(clientSocket, parseResult);
-                                break;
-                            case "DELETE":
-                                ProcessDeleteCommand(clientSocket, parseResult);
-                                break;
-                            default:
-                                clientSocket.SendAsync(_unknownCommandResponse);
-                                status = "unknown";
-                                activity?.SetStatus(ActivityStatusCode.Error, "Unknown command");
-                                break;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        status = "error";
-                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                        throw;
-                    }
-                    finally
-                    {
-                        stopwatch.Stop();
-                        var elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
-
-                        activity?.SetTag("command.status", status);
-                        activity?.SetTag("command.duration_ms", elapsedMs);
-
-                        var tags = new TagList
-                        {
-                            { "command.name", commandName },
-                            { "command.status", status }
-                        };
-
-                        Telemetry.CommandsProcessed.Add(1, tags);
-                        Telemetry.CommandDuration.Record(elapsedMs, tags);
-                    }
-                }
-
-                Console.WriteLine("----Parse result----");
-                Console.WriteLine("Command: {0}", commandName);
-                Console.WriteLine("Key: {0}", key);
-                Console.WriteLine("Value: {0}", parseResult.Value.ToString());
-                Console.WriteLine("----End----");
             }
         }
         catch (SocketException e)
@@ -291,32 +243,127 @@ public class TcpServer : IDisposable
         }
     }
 
-    private void ProcessDeleteCommand(Socket clientSocket, ParseCommand parseResult)
+    private async Task HandleCommandAsync(Socket clientSocket, byte[] buffer, int offset, int length, EndPoint? clientEndpoint, CancellationToken token)
     {
+        string receivedData = Encoding.UTF8.GetString(buffer, offset, length);
+        ReadOnlySpan<char> span = receivedData.AsSpan();
+        var parseResult = CommandParser.Parse(span);
+
+        var commandName = parseResult.Command.ToString();
         var key = parseResult.Key.ToString();
-        _simpleStore.Delete(key);
-        clientSocket.SendAsync(_okResponse);
+
+        using (var activity = Telemetry.ActivitySource.StartActivity(
+                   $"tcp.command {commandName}",
+                   ActivityKind.Server))
+        {
+            activity?.SetTag("command.name", commandName);
+            activity?.SetTag("command.key", key);
+            activity?.SetTag("command.payload_bytes", length);
+            activity?.SetTag("net.peer.address", clientEndpoint?.ToString());
+
+            var stopwatch = Stopwatch.StartNew();
+            var status = "ok";
+
+            try
+            {
+                switch (parseResult.Command)
+                {
+                    case "GET":
+                        await ProcessGetCommandAsync(clientSocket, key, activity, token);
+                        break;
+                    case "SET":
+                        await ProcessSetCommandAsync(clientSocket, key, parseResult.Value.ToString(), activity, token);
+                        break;
+                    case "DELETE":
+                        await ProcessDeleteCommandAsync(clientSocket, key, token);
+                        break;
+                    default:
+                        await clientSocket.SendAsync(_unknownCommandResponse, SocketFlags.None, token);
+                        status = "unknown";
+                        activity?.SetStatus(ActivityStatusCode.Error, "Unknown command");
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                status = "error";
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                throw;
+            }
+            finally
+            {
+                stopwatch.Stop();
+                var elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
+
+                if (status == "ok" && activity?.Status == ActivityStatusCode.Error)
+                    status = "error";
+
+                activity?.SetTag("command.status", status);
+                activity?.SetTag("command.duration_ms", elapsedMs);
+
+                var tags = new TagList
+                {
+                    { "command.name", commandName },
+                    { "command.status", status }
+                };
+
+                Telemetry.CommandsProcessed.Add(1, tags);
+                Telemetry.CommandDuration.Record(elapsedMs, tags);
+            }
+        }
     }
 
-    private void ProcessSetCommand(Socket clientSocket, ParseCommand parseResult)
+    private async Task ProcessDeleteCommandAsync(Socket clientSocket, string key, CancellationToken token)
     {
-        var key = parseResult.Key.ToString();
-        var profile = JsonSerializer.Deserialize<UserProfile>(parseResult.Value);
+        _simpleStore.Delete(key);
+        await clientSocket.SendAsync(_okResponse, SocketFlags.None, token);
+    }
+
+    private async Task ProcessSetCommandAsync(Socket clientSocket, string key, string value, Activity? activity, CancellationToken token)
+    {
+        UserProfile? profile;
+        try
+        {
+            profile = JsonSerializer.Deserialize<UserProfile>(value);
+        }
+        catch (JsonException ex)
+        {
+            Console.WriteLine($"Invalid JSON for key '{key}': {ex.Message}");
+            await clientSocket.SendAsync(_invalidJsonResponse, SocketFlags.None, token);
+            activity?.SetStatus(ActivityStatusCode.Error, "Invalid JSON");
+            return;
+        }
         if (profile == null)
         {
-            clientSocket.SendAsync(_unknownCommandResponse);
+            await clientSocket.SendAsync(_unknownCommandResponse, SocketFlags.None, token);
+            activity?.SetStatus(ActivityStatusCode.Error, "Empty profile");
             return;
         }
         _simpleStore.Set(key, profile);
-        clientSocket.SendAsync(_okResponse);
+        await clientSocket.SendAsync(_okResponse, SocketFlags.None, token);
     }
 
-    private void ProcessGetCommand(Socket clientSocket, ParseCommand parseResult)
+    private async Task ProcessGetCommandAsync(Socket clientSocket, string key, Activity? activity, CancellationToken token)
     {
-        var key = parseResult.Key.ToString();
-        var result = _simpleStore.Get(key);
+        UserProfile? result;
+        try
+        {
+            result = _simpleStore.Get(key);
+        }
+        catch (System.IO.InvalidDataException ex)
+        {
+            Console.WriteLine($"Corrupted data for key '{key}': {ex.Message}");
+            await clientSocket.SendAsync(_corruptedDataResponse, SocketFlags.None, token);
+            activity?.SetStatus(ActivityStatusCode.Error, "Corrupted data");
+            return;
+        }
+        if (result is null)
+        {
+            await clientSocket.SendAsync(_keyNotFoundResponse, SocketFlags.None, token);
+            return;
+        }
         var profileValue = JsonSerializer.SerializeToUtf8Bytes(result);
-        clientSocket.SendAsync(profileValue.Length > 0 ? profileValue : _keyNotFoundResponse);
+        await clientSocket.SendAsync(profileValue, SocketFlags.None, token);
     }
 
     public void Dispose()

@@ -70,7 +70,7 @@ public class UnitTest1
                     var profile = new UserProfile();
                     profile.CreatedAt = DateTime.UtcNow;
                     profile.Id = j;
-                    profile.Username = $"user_{taskId}_{j}";
+                    profile.Username = $"value_{taskId}_{j}";
                     store.Set(key, profile);
                 }
             }));

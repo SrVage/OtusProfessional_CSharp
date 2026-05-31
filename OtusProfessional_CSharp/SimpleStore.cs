@@ -35,13 +35,13 @@ public class SimpleStore : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _lock.EnterReadLock();
-        
+
         try
         {
-            var getValue = _store.GetValueOrDefault(key);
             Interlocked.Increment(ref _getCount);
-            var profile = JsonSerializer.Deserialize<UserProfile>(getValue);
-            return profile;
+            if (!_store.TryGetValue(key, out var bytes))
+                return null;
+            return UserProfile.DeserializeFromBinary(bytes);
         }
         finally
         {
